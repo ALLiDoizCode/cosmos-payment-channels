@@ -5,11 +5,46 @@
     {
       "type": "object",
       "required": [
-        "get_count"
+        "get_channel"
       ],
       "properties": {
-        "get_count": {
+        "get_channel": {
           "type": "object",
+          "required": [
+            "channel_id"
+          ],
+          "properties": {
+            "channel_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "list_channels"
+      ],
+      "properties": {
+        "list_channels": {
+          "type": "object",
+          "properties": {
+            "recipient": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "sender": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           "additionalProperties": false
         }
       },

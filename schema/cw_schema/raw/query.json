@@ -6,11 +6,35 @@
       "name": "payment_channel_msg_QueryMsg",
       "type": "enum",
       "cases": {
-        "get_count": {
+        "get_channel": {
           "type": "named",
-          "properties": {}
+          "properties": {
+            "channel_id": {
+              "value": 1
+            }
+          }
+        },
+        "list_channels": {
+          "type": "named",
+          "properties": {
+            "recipient": {
+              "value": 2
+            },
+            "sender": {
+              "value": 2
+            }
+          }
         }
       }
+    },
+    {
+      "name": "String",
+      "type": "string"
+    },
+    {
+      "name": "core::option::Option<alloc::string::String>",
+      "type": "optional",
+      "inner": 1
     }
   ]
 }

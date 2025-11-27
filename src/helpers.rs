@@ -1,19 +1,18 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use cosmwasm_schema::cw_serde;
 
 use cosmwasm_std::{
     to_json_binary, Addr, CosmosMsg, CustomQuery, Querier, QuerierWrapper, StdResult, WasmMsg,
     WasmQuery,
 };
 
-use crate::msg::{ExecuteMsg, GetCountResponse, QueryMsg};
+use crate::msg::{ExecuteMsg, GetChannelResponse, QueryMsg};
 
-/// CwTemplateContract is a wrapper around Addr that provides a lot of helpers
-/// for working with this.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct CwTemplateContract(pub Addr);
+/// PaymentChannelContract is a wrapper around Addr that provides helpers
+/// for working with the payment channel contract.
+#[cw_serde]
+pub struct PaymentChannelContract(pub Addr);
 
-impl CwTemplateContract {
+impl PaymentChannelContract {
     pub fn addr(&self) -> Addr {
         self.0.clone()
     }
@@ -28,20 +27,23 @@ impl CwTemplateContract {
         .into())
     }
 
-    /// Get Count
-    pub fn count<Q, T, CQ>(&self, querier: &Q) -> StdResult<GetCountResponse>
+    /// Get Channel
+    pub fn get_channel<Q, CQ>(
+        &self,
+        querier: &Q,
+        channel_id: String,
+    ) -> StdResult<GetChannelResponse>
     where
         Q: Querier,
-        T: Into<String>,
         CQ: CustomQuery,
     {
-        let msg = QueryMsg::GetCount {};
+        let msg = QueryMsg::GetChannel { channel_id };
         let query = WasmQuery::Smart {
             contract_addr: self.addr().into(),
             msg: to_json_binary(&msg)?,
         }
         .into();
-        let res: GetCountResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
+        let res: GetChannelResponse = QuerierWrapper::<CQ>::new(querier).query(&query)?;
         Ok(res)
     }
 }

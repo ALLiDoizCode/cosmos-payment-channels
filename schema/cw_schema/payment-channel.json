@@ -1,0 +1,97 @@
+{
+  "contract_name": "payment-channel",
+  "contract_version": "0.1.0",
+  "idl_version": "1.0.0",
+  "instantiate": {
+    "type": "v1",
+    "root": 0,
+    "definitions": [
+      {
+        "name": "payment_channel_msg_InstantiateMsg",
+        "type": "struct",
+        "properties": {
+          "count": {
+            "value": 1
+          }
+        }
+      },
+      {
+        "name": "i32",
+        "type": "integer",
+        "precision": 32,
+        "signed": true
+      }
+    ]
+  },
+  "execute": {
+    "type": "v1",
+    "root": 0,
+    "definitions": [
+      {
+        "name": "payment_channel_msg_ExecuteMsg",
+        "type": "enum",
+        "cases": {
+          "increment": {
+            "type": "named",
+            "properties": {}
+          },
+          "reset": {
+            "type": "named",
+            "properties": {
+              "count": {
+                "value": 1
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "i32",
+        "type": "integer",
+        "precision": 32,
+        "signed": true
+      }
+    ]
+  },
+  "query": {
+    "type": "v1",
+    "root": 0,
+    "definitions": [
+      {
+        "name": "payment_channel_msg_QueryMsg",
+        "type": "enum",
+        "cases": {
+          "get_count": {
+            "type": "named",
+            "properties": {}
+          }
+        }
+      }
+    ]
+  },
+  "migrate": null,
+  "sudo": null,
+  "responses": {
+    "get_count": {
+      "type": "v1",
+      "root": 0,
+      "definitions": [
+        {
+          "name": "payment_channel_msg_GetCountResponse",
+          "type": "struct",
+          "properties": {
+            "count": {
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "i32",
+          "type": "integer",
+          "precision": 32,
+          "signed": true
+        }
+      ]
+    }
+  }
+}

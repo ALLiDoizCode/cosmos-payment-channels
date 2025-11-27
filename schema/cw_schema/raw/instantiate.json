@@ -1,0 +1,21 @@
+{
+  "type": "v1",
+  "root": 0,
+  "definitions": [
+    {
+      "name": "payment_channel_msg_InstantiateMsg",
+      "type": "struct",
+      "properties": {
+        "count": {
+          "value": 1
+        }
+      }
+    },
+    {
+      "name": "i32",
+      "type": "integer",
+      "precision": 32,
+      "signed": true
+    }
+  ]
+}

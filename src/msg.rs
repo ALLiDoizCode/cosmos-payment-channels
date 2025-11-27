@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Binary, Uint128};
 
-use crate::state::PaymentChannel;
+use crate::state::{ChannelStatus, PaymentChannel};
 
 #[cw_serde]
 pub struct InstantiateMsg {}
@@ -35,6 +35,9 @@ pub enum QueryMsg {
     ListChannels {
         sender: Option<String>,
         recipient: Option<String>,
+        status: Option<ChannelStatus>,
+        limit: Option<u32>,
+        start_after: Option<String>,
     },
 }
 
@@ -47,6 +50,7 @@ pub struct GetChannelResponse {
 #[cw_serde]
 pub struct ListChannelsResponse {
     pub channels: Vec<PaymentChannel>,
+    pub total: u64,
 }
 
 #[cfg(test)]
@@ -150,6 +154,9 @@ mod tests {
         let msg = QueryMsg::ListChannels {
             sender: Some("cosmos1sender".to_string()),
             recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
         };
 
         let json = serde_json::to_string(&msg).unwrap();
@@ -164,6 +171,9 @@ mod tests {
         let msg = QueryMsg::ListChannels {
             sender: Some("cosmos1sender".to_string()),
             recipient: Some("cosmos1recipient".to_string()),
+            status: None,
+            limit: None,
+            start_after: None,
         };
 
         let json = serde_json::to_string(&msg).unwrap();
@@ -176,6 +186,102 @@ mod tests {
         let msg = InstantiateMsg {};
         let json = serde_json::to_string(&msg).unwrap();
         let restored: InstantiateMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_get_channel_response_serialization() {
+        use crate::state::ChannelStatus;
+        use cosmwasm_std::Addr;
+
+        let channel = PaymentChannel {
+            id: "test123".to_string(),
+            sender: Addr::unchecked("cosmos1sender"),
+            recipient: Addr::unchecked("cosmos1recipient"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1234567890,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+
+        let response = GetChannelResponse { channel };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let restored: GetChannelResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(response, restored);
+    }
+
+    #[test]
+    fn test_list_channels_response_serialization() {
+        use crate::state::ChannelStatus;
+        use cosmwasm_std::Addr;
+
+        let channel1 = PaymentChannel {
+            id: "test1".to_string(),
+            sender: Addr::unchecked("cosmos1sender"),
+            recipient: Addr::unchecked("cosmos1recipient"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1234567890,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+
+        let channel2 = PaymentChannel {
+            id: "test2".to_string(),
+            sender: Addr::unchecked("cosmos1sender2"),
+            recipient: Addr::unchecked("cosmos1recipient2"),
+            amount: Uint128::new(2000000),
+            denom: "stake".to_string(),
+            expiration: 9999999999,
+            highest_claim: Uint128::new(500000),
+            status: ChannelStatus::Closed,
+        };
+
+        let response = ListChannelsResponse {
+            channels: vec![channel1, channel2],
+            total: 2,
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+        let restored: ListChannelsResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(response, restored);
+        assert_eq!(restored.total, 2);
+        assert_eq!(restored.channels.len(), 2);
+    }
+
+    #[test]
+    fn test_query_msg_list_channels_with_all_filters() {
+        let msg = QueryMsg::ListChannels {
+            sender: Some("cosmos1sender".to_string()),
+            recipient: Some("cosmos1recipient".to_string()),
+            status: Some(ChannelStatus::Open),
+            limit: Some(10),
+            start_after: Some("channel_abc".to_string()),
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: QueryMsg = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg, restored);
+    }
+
+    #[test]
+    fn test_query_msg_list_channels_empty_filters() {
+        let msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("list_channels"));
+
+        let restored: QueryMsg = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, restored);
     }
 }

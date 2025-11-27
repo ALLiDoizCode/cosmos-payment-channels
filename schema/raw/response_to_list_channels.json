@@ -3,7 +3,8 @@
   "title": "ListChannelsResponse",
   "type": "object",
   "required": [
-    "channels"
+    "channels",
+    "total"
   ],
   "properties": {
     "channels": {
@@ -11,6 +12,11 @@
       "items": {
         "$ref": "#/definitions/PaymentChannel"
       }
+    },
+    "total": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
     }
   },
   "additionalProperties": false,

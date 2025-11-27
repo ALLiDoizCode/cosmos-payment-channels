@@ -50,6 +50,9 @@
         "nonce": {
           "value": 2
         },
+        "pubkey": {
+          "value": 5
+        },
         "signature": {
           "value": 5
         }

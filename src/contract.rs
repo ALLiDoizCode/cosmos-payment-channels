@@ -5,6 +5,7 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, GetChannelResponse, InstantiateMsg, ListChannelsResponse, QueryMsg};
+use crate::state::ChannelStatus;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:payment-channel";
@@ -366,28 +367,88 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetChannel { channel_id } => {
             to_json_binary(&query::get_channel(deps, channel_id)?)
         }
-        QueryMsg::ListChannels { sender, recipient } => {
-            to_json_binary(&query::list_channels(deps, sender, recipient)?)
-        }
+        QueryMsg::ListChannels {
+            sender,
+            recipient,
+            status,
+            limit,
+            start_after,
+        } => to_json_binary(&query::list_channels(
+            deps,
+            sender,
+            recipient,
+            status,
+            limit,
+            start_after,
+        )?),
     }
 }
 
 pub mod query {
     use super::*;
+    use crate::state::CHANNELS;
     use cosmwasm_std::StdError;
 
-    pub fn get_channel(_deps: Deps, _channel_id: String) -> StdResult<GetChannelResponse> {
-        // Implementation in Story 3.5
-        Err(StdError::msg("Not implemented yet (Story 3.5)"))
+    pub fn get_channel(deps: Deps, channel_id: String) -> StdResult<GetChannelResponse> {
+        let channel = CHANNELS
+            .load(deps.storage, &channel_id)
+            .map_err(|_| StdError::msg(format!("Channel not found: {}", channel_id)))?;
+
+        Ok(GetChannelResponse { channel })
     }
 
     pub fn list_channels(
-        _deps: Deps,
-        _sender: Option<String>,
-        _recipient: Option<String>,
+        deps: Deps,
+        sender: Option<String>,
+        recipient: Option<String>,
+        status: Option<ChannelStatus>,
+        limit: Option<u32>,
+        start_after: Option<String>,
     ) -> StdResult<ListChannelsResponse> {
-        // Implementation in Story 3.5
-        Err(StdError::msg("Not implemented yet (Story 3.5)"))
+        use cosmwasm_std::Order;
+        use cw_storage_plus::Bound;
+
+        // Set default and max limit
+        let limit = limit.unwrap_or(30).min(100) as usize;
+
+        // Create start bound for pagination
+        let start = start_after.as_ref().map(|s| Bound::exclusive(s.as_str()));
+
+        // Iterate over all channels with pagination
+        let channels: Vec<_> = CHANNELS
+            .range(deps.storage, start, None, Order::Ascending)
+            .filter_map(|item| {
+                let (_key, channel) = item.ok()?;
+
+                // Apply sender filter
+                if let Some(ref filter_sender) = sender {
+                    if channel.sender.as_str() != filter_sender {
+                        return None;
+                    }
+                }
+
+                // Apply recipient filter
+                if let Some(ref filter_recipient) = recipient {
+                    if channel.recipient.as_str() != filter_recipient {
+                        return None;
+                    }
+                }
+
+                // Apply status filter
+                if let Some(ref filter_status) = status {
+                    if channel.status != *filter_status {
+                        return None;
+                    }
+                }
+
+                Some(channel)
+            })
+            .take(limit)
+            .collect();
+
+        let total = channels.len() as u64;
+
+        Ok(ListChannelsResponse { channels, total })
     }
 }
 
@@ -500,17 +561,20 @@ mod tests {
     }
 
     #[test]
-    fn list_channels_unimplemented() {
+    fn list_channels_works() {
         let deps = mock_dependencies();
 
         let msg = QueryMsg::ListChannels {
             sender: None,
             recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
         };
         let res = query(deps.as_ref(), mock_env(), msg);
 
-        // Should return error
-        assert!(res.is_err());
+        // Should succeed with empty list
+        assert!(res.is_ok());
     }
 
     // Task 2 Unit Tests: Channel Loading and Validation
@@ -672,5 +736,531 @@ mod tests {
         // Verify channel status updated to Expired
         let updated_channel = CHANNELS.load(&deps.storage, "expired_channel").unwrap();
         assert_eq!(updated_channel.status, ChannelStatus::Expired);
+    }
+
+    // Story 3.5 Unit Tests: Query Functions
+
+    #[test]
+    fn test_query_channel_success() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create a test channel
+        let channel = PaymentChannel {
+            id: "test_channel_123".to_string(),
+            sender: Addr::unchecked("cosmos1sender"),
+            recipient: Addr::unchecked("cosmos1recipient"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+
+        CHANNELS
+            .save(&mut deps.storage, "test_channel_123", &channel)
+            .unwrap();
+
+        // Query the channel
+        let msg = QueryMsg::GetChannel {
+            channel_id: "test_channel_123".to_string(),
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: GetChannelResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify response
+        assert_eq!(response.channel.id, "test_channel_123");
+        assert_eq!(response.channel.sender, Addr::unchecked("cosmos1sender"));
+        assert_eq!(
+            response.channel.recipient,
+            Addr::unchecked("cosmos1recipient")
+        );
+        assert_eq!(response.channel.amount, Uint128::new(1000000));
+        assert_eq!(response.channel.denom, "uakt");
+        assert_eq!(response.channel.status, ChannelStatus::Open);
+        assert_eq!(response.channel.highest_claim, Uint128::zero());
+    }
+
+    #[test]
+    fn test_query_channel_not_found() {
+        let deps = mock_dependencies();
+
+        // Query non-existent channel
+        let msg = QueryMsg::GetChannel {
+            channel_id: "nonexistent".to_string(),
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg);
+
+        // Should return error
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("Channel not found"));
+    }
+
+    #[test]
+    fn test_query_channel_closed_status() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create a closed channel
+        let channel = PaymentChannel {
+            id: "closed_channel".to_string(),
+            sender: Addr::unchecked("cosmos1sender"),
+            recipient: Addr::unchecked("cosmos1recipient"),
+            amount: Uint128::new(2000000),
+            denom: "stake".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::new(1500000),
+            status: ChannelStatus::Closed,
+        };
+
+        CHANNELS
+            .save(&mut deps.storage, "closed_channel", &channel)
+            .unwrap();
+
+        // Query the channel
+        let msg = QueryMsg::GetChannel {
+            channel_id: "closed_channel".to_string(),
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: GetChannelResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify response
+        assert_eq!(response.channel.status, ChannelStatus::Closed);
+        assert_eq!(response.channel.highest_claim, Uint128::new(1500000));
+    }
+
+    #[test]
+    fn test_query_channel_expired_status() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create an expired channel
+        let channel = PaymentChannel {
+            id: "expired_channel".to_string(),
+            sender: Addr::unchecked("cosmos1sender"),
+            recipient: Addr::unchecked("cosmos1recipient"),
+            amount: Uint128::new(3000000),
+            denom: "uakt".to_string(),
+            expiration: 1000000,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Expired,
+        };
+
+        CHANNELS
+            .save(&mut deps.storage, "expired_channel", &channel)
+            .unwrap();
+
+        // Query the channel
+        let msg = QueryMsg::GetChannel {
+            channel_id: "expired_channel".to_string(),
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: GetChannelResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify response
+        assert_eq!(response.channel.status, ChannelStatus::Expired);
+        assert_eq!(response.channel.highest_claim, Uint128::zero());
+    }
+
+    #[test]
+    fn test_list_channels_empty() {
+        let deps = mock_dependencies();
+
+        // Query empty state
+        let msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify empty response
+        assert_eq!(response.channels.len(), 0);
+        assert_eq!(response.total, 0);
+    }
+
+    #[test]
+    fn test_list_channels_all() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create 3 test channels
+        for i in 1..=3 {
+            let channel = PaymentChannel {
+                id: format!("channel_{}", i),
+                sender: Addr::unchecked(format!("cosmos1sender{}", i)),
+                recipient: Addr::unchecked(format!("cosmos1recipient{}", i)),
+                amount: Uint128::new(1000000 * i),
+                denom: "uakt".to_string(),
+                expiration: 1735689600,
+                highest_claim: Uint128::zero(),
+                status: ChannelStatus::Open,
+            };
+            CHANNELS
+                .save(&mut deps.storage, &format!("channel_{}", i), &channel)
+                .unwrap();
+        }
+
+        // Query all channels
+        let msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify 3 channels returned
+        assert_eq!(response.channels.len(), 3);
+        assert_eq!(response.total, 3);
+    }
+
+    #[test]
+    fn test_list_channels_filter_sender() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create 2 channels from sender A, 1 from sender B
+        let channel1 = PaymentChannel {
+            id: "channel_a1".to_string(),
+            sender: Addr::unchecked("cosmos1senderA"),
+            recipient: Addr::unchecked("cosmos1recipient1"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_a1", &channel1)
+            .unwrap();
+
+        let channel2 = PaymentChannel {
+            id: "channel_a2".to_string(),
+            sender: Addr::unchecked("cosmos1senderA"),
+            recipient: Addr::unchecked("cosmos1recipient2"),
+            amount: Uint128::new(2000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_a2", &channel2)
+            .unwrap();
+
+        let channel3 = PaymentChannel {
+            id: "channel_b1".to_string(),
+            sender: Addr::unchecked("cosmos1senderB"),
+            recipient: Addr::unchecked("cosmos1recipient3"),
+            amount: Uint128::new(3000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_b1", &channel3)
+            .unwrap();
+
+        // Query channels for sender A
+        let msg = QueryMsg::ListChannels {
+            sender: Some("cosmos1senderA".to_string()),
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify only sender A's channels returned
+        assert_eq!(response.channels.len(), 2);
+        assert_eq!(response.total, 2);
+        assert!(response
+            .channels
+            .iter()
+            .all(|c| c.sender == Addr::unchecked("cosmos1senderA")));
+    }
+
+    #[test]
+    fn test_list_channels_filter_recipient() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create channels with different recipients
+        let channel1 = PaymentChannel {
+            id: "channel_1".to_string(),
+            sender: Addr::unchecked("cosmos1sender1"),
+            recipient: Addr::unchecked("cosmos1recipientA"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_1", &channel1)
+            .unwrap();
+
+        let channel2 = PaymentChannel {
+            id: "channel_2".to_string(),
+            sender: Addr::unchecked("cosmos1sender2"),
+            recipient: Addr::unchecked("cosmos1recipientB"),
+            amount: Uint128::new(2000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_2", &channel2)
+            .unwrap();
+
+        // Query channels for recipient A
+        let msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: Some("cosmos1recipientA".to_string()),
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify only recipient A's channel returned
+        assert_eq!(response.channels.len(), 1);
+        assert_eq!(response.total, 1);
+        assert_eq!(
+            response.channels[0].recipient,
+            Addr::unchecked("cosmos1recipientA")
+        );
+    }
+
+    #[test]
+    fn test_list_channels_filter_status() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create 2 Open channels and 1 Closed channel
+        let channel1 = PaymentChannel {
+            id: "channel_open1".to_string(),
+            sender: Addr::unchecked("cosmos1sender1"),
+            recipient: Addr::unchecked("cosmos1recipient1"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_open1", &channel1)
+            .unwrap();
+
+        let channel2 = PaymentChannel {
+            id: "channel_open2".to_string(),
+            sender: Addr::unchecked("cosmos1sender2"),
+            recipient: Addr::unchecked("cosmos1recipient2"),
+            amount: Uint128::new(2000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_open2", &channel2)
+            .unwrap();
+
+        let channel3 = PaymentChannel {
+            id: "channel_closed".to_string(),
+            sender: Addr::unchecked("cosmos1sender3"),
+            recipient: Addr::unchecked("cosmos1recipient3"),
+            amount: Uint128::new(3000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::new(2500000),
+            status: ChannelStatus::Closed,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_closed", &channel3)
+            .unwrap();
+
+        // Query only Open channels
+        let msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: Some(ChannelStatus::Open),
+            limit: None,
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify only Open channels returned
+        assert_eq!(response.channels.len(), 2);
+        assert_eq!(response.total, 2);
+        assert!(response
+            .channels
+            .iter()
+            .all(|c| c.status == ChannelStatus::Open));
+    }
+
+    #[test]
+    fn test_list_channels_combined_filters() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create multiple channels
+        let channel1 = PaymentChannel {
+            id: "channel_1".to_string(),
+            sender: Addr::unchecked("cosmos1senderA"),
+            recipient: Addr::unchecked("cosmos1recipient1"),
+            amount: Uint128::new(1000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_1", &channel1)
+            .unwrap();
+
+        let channel2 = PaymentChannel {
+            id: "channel_2".to_string(),
+            sender: Addr::unchecked("cosmos1senderA"),
+            recipient: Addr::unchecked("cosmos1recipient2"),
+            amount: Uint128::new(2000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::new(1500000),
+            status: ChannelStatus::Closed,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_2", &channel2)
+            .unwrap();
+
+        let channel3 = PaymentChannel {
+            id: "channel_3".to_string(),
+            sender: Addr::unchecked("cosmos1senderB"),
+            recipient: Addr::unchecked("cosmos1recipient3"),
+            amount: Uint128::new(3000000),
+            denom: "uakt".to_string(),
+            expiration: 1735689600,
+            highest_claim: Uint128::zero(),
+            status: ChannelStatus::Open,
+        };
+        CHANNELS
+            .save(&mut deps.storage, "channel_3", &channel3)
+            .unwrap();
+
+        // Query sender A + Open status
+        let msg = QueryMsg::ListChannels {
+            sender: Some("cosmos1senderA".to_string()),
+            recipient: None,
+            status: Some(ChannelStatus::Open),
+            limit: None,
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify only sender A's Open channel returned
+        assert_eq!(response.channels.len(), 1);
+        assert_eq!(response.total, 1);
+        assert_eq!(
+            response.channels[0].sender,
+            Addr::unchecked("cosmos1senderA")
+        );
+        assert_eq!(response.channels[0].status, ChannelStatus::Open);
+    }
+
+    #[test]
+    fn test_list_channels_pagination() {
+        use crate::state::{PaymentChannel, CHANNELS};
+        use cosmwasm_std::{Addr, Uint128};
+
+        let mut deps = mock_dependencies();
+
+        // Create 5 channels
+        for i in 1..=5 {
+            let channel = PaymentChannel {
+                id: format!("channel_{}", i),
+                sender: Addr::unchecked(format!("cosmos1sender{}", i)),
+                recipient: Addr::unchecked(format!("cosmos1recipient{}", i)),
+                amount: Uint128::new(1000000 * i),
+                denom: "uakt".to_string(),
+                expiration: 1735689600,
+                highest_claim: Uint128::zero(),
+                status: ChannelStatus::Open,
+            };
+            CHANNELS
+                .save(&mut deps.storage, &format!("channel_{}", i), &channel)
+                .unwrap();
+        }
+
+        // Query with limit 2
+        let msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: Some(2),
+            start_after: None,
+        };
+
+        let res = query(deps.as_ref(), mock_env(), msg).unwrap();
+        let response: ListChannelsResponse = cosmwasm_std::from_json(&res).unwrap();
+
+        // Verify only 2 channels returned
+        assert_eq!(response.channels.len(), 2);
+        assert_eq!(response.total, 2);
+
+        // Query next page with start_after
+        let msg2 = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: Some(2),
+            start_after: Some("channel_2".to_string()),
+        };
+
+        let res2 = query(deps.as_ref(), mock_env(), msg2).unwrap();
+        let response2: ListChannelsResponse = cosmwasm_std::from_json(&res2).unwrap();
+
+        // Verify next 2 channels returned
+        assert_eq!(response2.channels.len(), 2);
+        assert_eq!(response2.total, 2);
+        assert_eq!(response2.channels[0].id, "channel_3");
+        assert_eq!(response2.channels[1].id, "channel_4");
     }
 }

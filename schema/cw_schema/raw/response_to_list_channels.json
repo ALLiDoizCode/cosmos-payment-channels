@@ -8,6 +8,9 @@
       "properties": {
         "channels": {
           "value": 7
+        },
+        "total": {
+          "value": 5
         }
       }
     },

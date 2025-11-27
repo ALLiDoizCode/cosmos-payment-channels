@@ -32,6 +32,14 @@
         "list_channels": {
           "type": "object",
           "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
             "recipient": {
               "type": [
                 "string",
@@ -43,6 +51,22 @@
                 "string",
                 "null"
               ]
+            },
+            "start_after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ChannelStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -50,5 +74,15 @@
       },
       "additionalProperties": false
     }
-  ]
+  ],
+  "definitions": {
+    "ChannelStatus": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closed",
+        "expired"
+      ]
+    }
+  }
 }

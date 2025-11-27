@@ -148,6 +148,9 @@ mod tests {
         let list_msg = QueryMsg::ListChannels {
             sender: Some("cosmos1sender".to_string()),
             recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
         };
 
         let json = serde_json::to_string(&list_msg).unwrap();
@@ -969,5 +972,375 @@ mod tests {
 
         // Should fail with ChannelClosed (channel already closed)
         assert!(err.to_string().contains("closed"));
+    }
+
+    // Story 3.5 Integration Tests: Query Functions
+
+    #[test]
+    fn test_query_channel_success() {
+        use cosmwasm_std::coins;
+
+        let (mut app, contract) = proper_instantiate();
+
+        let sender = app.api().addr_make("sender");
+        let recipient = app.api().addr_make("recipient");
+
+        let block_time = app.block_info().time.seconds();
+        let expiration = block_time + (30 * 24 * 60 * 60); // 30 days
+
+        // Open a channel
+        let open_msg = ExecuteMsg::OpenChannel {
+            recipient: recipient.to_string(),
+            expiration,
+        };
+
+        let res = app
+            .execute_contract(
+                sender.clone(),
+                contract.addr(),
+                &open_msg,
+                &coins(1_000_000, "uakt"),
+            )
+            .unwrap();
+
+        // Extract channel_id from response
+        let data: serde_json::Value = cosmwasm_std::from_json(&res.data.unwrap()).unwrap();
+        let channel_id = data["channel_id"].as_str().unwrap().to_string();
+
+        // Query the channel
+        let query_msg = QueryMsg::GetChannel {
+            channel_id: channel_id.clone(),
+        };
+
+        let response: crate::msg::GetChannelResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg)
+            .unwrap();
+
+        // Verify channel data
+        assert_eq!(response.channel.id, channel_id);
+        assert_eq!(response.channel.sender, sender);
+        assert_eq!(response.channel.recipient, recipient);
+        assert_eq!(response.channel.amount, Uint128::new(1_000_000));
+        assert_eq!(response.channel.denom, "uakt");
+        assert_eq!(response.channel.status, ChannelStatus::Open);
+        assert_eq!(response.channel.highest_claim, Uint128::zero());
+    }
+
+    #[test]
+    fn test_query_channel_not_found() {
+        let (app, contract) = proper_instantiate();
+
+        // Query non-existent channel
+        let query_msg = QueryMsg::GetChannel {
+            channel_id: "nonexistent_channel_id".to_string(),
+        };
+
+        let err = app
+            .wrap()
+            .query_wasm_smart::<crate::msg::GetChannelResponse>(contract.addr(), &query_msg)
+            .unwrap_err();
+
+        // Should contain error message
+        assert!(err.to_string().contains("Channel not found"));
+    }
+
+    #[test]
+    fn test_list_channels_empty() {
+        let (app, contract) = proper_instantiate();
+
+        // Query empty state
+        let query_msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let response: crate::msg::ListChannelsResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg)
+            .unwrap();
+
+        // Verify empty response
+        assert_eq!(response.channels.len(), 0);
+        assert_eq!(response.total, 0);
+    }
+
+    #[test]
+    fn test_list_channels_all() {
+        use cosmwasm_std::coins;
+
+        let (mut app, contract) = proper_instantiate();
+
+        let sender = app.api().addr_make("sender");
+        let block_time = app.block_info().time.seconds();
+        let expiration = block_time + (30 * 24 * 60 * 60); // 30 days
+
+        // Open 3 channels
+        for i in 1..=3 {
+            let recipient = app.api().addr_make(&format!("recipient{}", i));
+            let open_msg = ExecuteMsg::OpenChannel {
+                recipient: recipient.to_string(),
+                expiration,
+            };
+
+            app.execute_contract(
+                sender.clone(),
+                contract.addr(),
+                &open_msg,
+                &coins(1_000_000 * i, "uakt"),
+            )
+            .unwrap();
+        }
+
+        // Query all channels
+        let query_msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let response: crate::msg::ListChannelsResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg)
+            .unwrap();
+
+        // Verify 3 channels returned
+        assert_eq!(response.channels.len(), 3);
+        assert_eq!(response.total, 3);
+    }
+
+    #[test]
+    fn test_list_channels_filter_sender() {
+        use cosmwasm_std::coins;
+
+        let (mut app, contract) = proper_instantiate();
+
+        let sender_a = app.api().addr_make("senderA");
+        let sender_b = app.api().addr_make("senderB");
+        let recipient1 = app.api().addr_make("recipient1");
+        let recipient2 = app.api().addr_make("recipient2");
+
+        // Fund both senders
+        app.init_modules(|router, _api, storage| {
+            router
+                .bank
+                .init_balance(storage, &sender_a, coins(10_000_000_000, "uakt"))
+                .unwrap();
+            router
+                .bank
+                .init_balance(storage, &sender_b, coins(10_000_000_000, "uakt"))
+                .unwrap();
+        });
+
+        let block_time = app.block_info().time.seconds();
+        let expiration = block_time + (30 * 24 * 60 * 60); // 30 days
+
+        // Open 2 channels from sender A (with different recipients to avoid channel_id collision)
+        let open_msg1 = ExecuteMsg::OpenChannel {
+            recipient: recipient1.to_string(),
+            expiration,
+        };
+        app.execute_contract(
+            sender_a.clone(),
+            contract.addr(),
+            &open_msg1,
+            &coins(1_000_000, "uakt"),
+        )
+        .unwrap();
+
+        let recipient1b = app.api().addr_make("recipient1b");
+        let open_msg2 = ExecuteMsg::OpenChannel {
+            recipient: recipient1b.to_string(),
+            expiration,
+        };
+        app.execute_contract(
+            sender_a.clone(),
+            contract.addr(),
+            &open_msg2,
+            &coins(2_000_000, "uakt"),
+        )
+        .unwrap();
+
+        // Open 1 channel from sender B
+        let open_msg = ExecuteMsg::OpenChannel {
+            recipient: recipient2.to_string(),
+            expiration,
+        };
+        app.execute_contract(
+            sender_b,
+            contract.addr(),
+            &open_msg,
+            &coins(3_000_000, "uakt"),
+        )
+        .unwrap();
+
+        // Query channels for sender A
+        let query_msg = QueryMsg::ListChannels {
+            sender: Some(sender_a.to_string()),
+            recipient: None,
+            status: None,
+            limit: None,
+            start_after: None,
+        };
+
+        let response: crate::msg::ListChannelsResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg)
+            .unwrap();
+
+        // Verify only sender A's channels returned
+        assert_eq!(response.channels.len(), 2);
+        assert_eq!(response.total, 2);
+        assert!(response.channels.iter().all(|c| c.sender == sender_a));
+    }
+
+    #[test]
+    fn test_list_channels_filter_status() {
+        use cosmwasm_std::coins;
+
+        let (mut app, contract) = proper_instantiate();
+
+        let sender = app.api().addr_make("sender");
+        let recipient1 = app.api().addr_make("recipient1");
+        let recipient2 = app.api().addr_make("recipient2");
+
+        let block_time = app.block_info().time.seconds();
+        let expiration = block_time + (30 * 24 * 60 * 60); // 30 days
+
+        // Open 2 channels (with different recipients to avoid channel_id collision)
+        let channel1_id: String;
+        let open_msg1 = ExecuteMsg::OpenChannel {
+            recipient: recipient1.to_string(),
+            expiration,
+        };
+        let res1 = app
+            .execute_contract(
+                sender.clone(),
+                contract.addr(),
+                &open_msg1,
+                &coins(1_000_000, "uakt"),
+            )
+            .unwrap();
+        let data: serde_json::Value = cosmwasm_std::from_json(&res1.data.unwrap()).unwrap();
+        channel1_id = data["channel_id"].as_str().unwrap().to_string();
+
+        let open_msg2 = ExecuteMsg::OpenChannel {
+            recipient: recipient2.to_string(),
+            expiration,
+        };
+        app.execute_contract(
+            sender.clone(),
+            contract.addr(),
+            &open_msg2,
+            &coins(2_000_000, "uakt"),
+        )
+        .unwrap();
+
+        // Close channel 1 using helper function
+        let claim = generate_test_claim(&channel1_id, 800_000u128, 1u64, &TEST_PRIVATE_KEY);
+
+        let close_msg = ExecuteMsg::CloseChannel {
+            channel_id: channel1_id,
+            final_claim: claim,
+        };
+
+        app.execute_contract(recipient1.clone(), contract.addr(), &close_msg, &[])
+            .unwrap();
+
+        // Query only Open channels
+        let query_msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: Some(ChannelStatus::Open),
+            limit: None,
+            start_after: None,
+        };
+
+        let response: crate::msg::ListChannelsResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg)
+            .unwrap();
+
+        // Verify only 1 Open channel returned
+        assert_eq!(response.channels.len(), 1);
+        assert_eq!(response.total, 1);
+        assert!(response
+            .channels
+            .iter()
+            .all(|c| c.status == ChannelStatus::Open));
+    }
+
+    #[test]
+    fn test_list_channels_pagination() {
+        use cosmwasm_std::coins;
+
+        let (mut app, contract) = proper_instantiate();
+
+        let sender = app.api().addr_make("sender");
+        let block_time = app.block_info().time.seconds();
+        let expiration = block_time + (30 * 24 * 60 * 60); // 30 days
+
+        // Open 5 channels
+        for i in 1..=5 {
+            let recipient = app.api().addr_make(&format!("recipient{}", i));
+            let open_msg = ExecuteMsg::OpenChannel {
+                recipient: recipient.to_string(),
+                expiration,
+            };
+
+            app.execute_contract(
+                sender.clone(),
+                contract.addr(),
+                &open_msg,
+                &coins(1_000_000 * i, "uakt"),
+            )
+            .unwrap();
+        }
+
+        // Query with limit 2
+        let query_msg = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: Some(2),
+            start_after: None,
+        };
+
+        let response: crate::msg::ListChannelsResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg)
+            .unwrap();
+
+        // Verify only 2 channels returned
+        assert_eq!(response.channels.len(), 2);
+        assert_eq!(response.total, 2);
+
+        // Get second channel ID for pagination
+        let second_channel_id = response.channels[1].id.clone();
+
+        // Query next page with start_after
+        let query_msg2 = QueryMsg::ListChannels {
+            sender: None,
+            recipient: None,
+            status: None,
+            limit: Some(2),
+            start_after: Some(second_channel_id),
+        };
+
+        let response2: crate::msg::ListChannelsResponse = app
+            .wrap()
+            .query_wasm_smart(contract.addr(), &query_msg2)
+            .unwrap();
+
+        // Verify next 2 channels returned (different from first page)
+        assert_eq!(response2.channels.len(), 2);
+        assert_eq!(response2.total, 2);
+        assert_ne!(response2.channels[0].id, response.channels[0].id);
+        assert_ne!(response2.channels[0].id, response.channels[1].id);
     }
 }
